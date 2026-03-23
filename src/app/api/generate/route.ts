@@ -5,6 +5,8 @@ import { generateExcel } from "@/lib/excel-generator";
 import type { CsvRow, Selection } from "@/lib/types";
 import { PassThrough } from "stream";
 
+export const runtime = "nodejs";
+
 export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();

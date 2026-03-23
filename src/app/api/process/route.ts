@@ -3,6 +3,8 @@ import Papa from "papaparse";
 import { processCSV } from "@/lib/csv-parser";
 import type { CsvRow } from "@/lib/types";
 
+export const runtime = "nodejs";
+
 export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();
