@@ -1,65 +1,171 @@
-import Image from "next/image";
+"use client";
+
+import { useState, useCallback } from "react";
+import { UploadZone } from "@/components/upload-zone";
+import { StatsBar } from "@/components/stats-bar";
+import { ReportTree, selectionKey, parseSelectionKey } from "@/components/report-tree";
+import { DownloadBar } from "@/components/download-bar";
+import type { ProcessResult, Selection } from "@/lib/types";
 
 export default function Home() {
+  const [file, setFile] = useState<File | null>(null);
+  const [result, setResult] = useState<ProcessResult | null>(null);
+  const [selections, setSelections] = useState<Set<string>>(new Set());
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleFileUpload = useCallback(async (uploadedFile: File) => {
+    setFile(uploadedFile);
+    setError(null);
+    setIsProcessing(true);
+    setResult(null);
+    setSelections(new Set());
+
+    try {
+      const formData = new FormData();
+      formData.append("file", uploadedFile);
+
+      const res = await fetch("/api/process", { method: "POST", body: formData });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || "Failed to process file");
+      }
+
+      const data: ProcessResult = await res.json();
+      setResult(data);
+
+      // Auto-select all
+      const allKeys = new Set(
+        data.companies.flatMap(c =>
+          c.reports.flatMap(r =>
+            r.bus.map(b => selectionKey(c.name, r.name, b.name))
+          )
+        )
+      );
+      setSelections(allKeys);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      setIsProcessing(false);
+    }
+  }, []);
+
+  const handleClear = useCallback(() => {
+    setFile(null);
+    setResult(null);
+    setSelections(new Set());
+    setError(null);
+  }, []);
+
+  const handleDownloadSingle = useCallback(async (selection: Selection) => {
+    if (!file) return;
+    setIsGenerating(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("selections", JSON.stringify([selection]));
+
+      const res = await fetch("/api/generate", { method: "POST", body: formData });
+      if (!res.ok) throw new Error("Failed to generate report");
+
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      const disposition = res.headers.get("Content-Disposition");
+      const match = disposition?.match(/filename="(.+)"/);
+      a.download = match?.[1] || "report.xlsx";
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Download failed");
+    } finally {
+      setIsGenerating(false);
+    }
+  }, [file]);
+
+  const handleDownloadSelected = useCallback(async () => {
+    if (!file || selections.size === 0) return;
+    setIsGenerating(true);
+    try {
+      const selectionArray: Selection[] = [...selections].map(parseSelectionKey);
+
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("selections", JSON.stringify(selectionArray));
+
+      const res = await fetch("/api/generate", { method: "POST", body: formData });
+      if (!res.ok) throw new Error("Failed to generate reports");
+
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      const disposition = res.headers.get("Content-Disposition");
+      const match = disposition?.match(/filename="(.+)"/);
+      a.download = match?.[1] || "reports.zip";
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Download failed");
+    } finally {
+      setIsGenerating(false);
+    }
+  }, [file, selections]);
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
+    <div className="min-h-screen bg-background">
+      {/* Header */}
+      <header className="border-b border-border">
+        <div className="max-w-4xl mx-auto px-4 py-4">
+          <h1 className="text-xl font-bold text-[#2F5496]">Monthly Data Status Reports</h1>
+          <p className="text-sm text-muted-foreground">Upload CSV, preview data completeness, download Excel reports</p>
+        </div>
+      </header>
+
+      {/* Main content */}
+      <main className="max-w-4xl mx-auto px-4 py-6 space-y-6 pb-24">
+        <UploadZone
+          onFileUpload={handleFileUpload}
+          isProcessing={isProcessing}
+          fileName={file?.name || null}
+          onClear={handleClear}
         />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
+
+        {error && (
+          <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg p-3">
+            {error}
+          </div>
+        )}
+
+        {isProcessing && (
+          <div className="text-center py-8">
+            <div className="inline-block h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+            <p className="text-sm text-muted-foreground mt-2">Processing CSV...</p>
+          </div>
+        )}
+
+        {result && (
+          <>
+            <StatsBar summary={result.summary} />
+            <ReportTree
+              companies={result.companies}
+              selections={selections}
+              onSelectionChange={setSelections}
+              onDownloadSingle={handleDownloadSingle}
+              isGenerating={isGenerating}
             />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
+          </>
+        )}
       </main>
+
+      {/* Download bar */}
+      <DownloadBar
+        selectedCount={selections.size}
+        onDownload={handleDownloadSelected}
+        isGenerating={isGenerating}
+      />
     </div>
   );
 }
