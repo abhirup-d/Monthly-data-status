@@ -1,7 +1,7 @@
 "use client";
 
 import { Card, CardContent } from "@/components/ui/card";
-import { Building2, FileText, Layers, CheckCircle } from "lucide-react";
+import { Building2, FileText, Layers, Calendar, CalendarDays } from "lucide-react";
 import type { Summary } from "@/lib/types";
 
 interface StatsBarProps {
@@ -13,11 +13,12 @@ export function StatsBar({ summary }: StatsBarProps) {
     { label: "Companies", value: summary.totalCompanies, icon: Building2 },
     { label: "Reports", value: summary.totalReports, icon: FileText },
     { label: "Business Units", value: summary.totalBUs, icon: Layers },
-    { label: "Overall Completeness", value: `${summary.overallCompleteness}%`, icon: CheckCircle },
+    { label: "Monthly Completeness", value: `${summary.overallCompleteness}%`, icon: Calendar },
+    { label: "Yearly Completeness", value: `${summary.overallYearlyCompleteness}%`, icon: CalendarDays },
   ];
 
   return (
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+    <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
       {stats.map((stat) => (
         <Card key={stat.label}>
           <CardContent className="p-4">

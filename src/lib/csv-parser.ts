@@ -42,13 +42,9 @@ function getFyMonths(dataStartDate: string): [number, number][] {
   }
 }
 
-function computeBuCompleteness(rows: CsvRow[], today: Date): { completeness: number; total: number; completed: number } {
+function computeMonthlyCompleteness(rows: CsvRow[], today: Date): { completeness: number; total: number; completed: number } {
   const fyMonths = getFyMonths(rows[0]?.data_start_date || "");
-
-  // Get unique question_ids
   const questionIds = new Set(rows.map(r => r.question_id));
-
-  // For each (question_id, month): check if ANY row is COMPLETED
   const qidMonthStatus = new Map<string, boolean>();
 
   for (const row of rows) {
@@ -64,7 +60,6 @@ function computeBuCompleteness(rows: CsvRow[], today: Date): { completeness: num
     }
   }
 
-  // Count completed vs total for months that have ended
   let total = 0;
   let completed = 0;
 
@@ -81,16 +76,36 @@ function computeBuCompleteness(rows: CsvRow[], today: Date): { completeness: num
   return { completeness, total, completed };
 }
 
-export function processCSV(rows: CsvRow[]): ProcessResult {
-  const today = new Date();
+function computeYearlyCompleteness(rows: CsvRow[]): { completeness: number; total: number; completed: number } {
+  // Dedup by question_id: if ANY row for a question_id has COMPLETED, count as completed
+  const qidStatus = new Map<string, boolean>();
 
-  // Filter to MONTHLY only
-  const monthlyRows = rows.filter(r => r.reporting_frequency === "MONTHLY");
+  for (const row of rows) {
+    const qid = (row.question_id || "").trim();
+    const isCompleted = (row.question_status || "").trim() === "COMPLETED";
+    if (!qidStatus.has(qid)) {
+      qidStatus.set(qid, isCompleted);
+    } else if (isCompleted) {
+      qidStatus.set(qid, true);
+    }
+  }
 
-  // Group by company > report > bu
-  const companyMap = new Map<string, Map<string, Map<string, CsvRow[]>>>();
+  let total = 0;
+  let completed = 0;
+  for (const isCompleted of qidStatus.values()) {
+    total++;
+    if (isCompleted) completed++;
+  }
 
-  for (const row of monthlyRows) {
+  const completeness = total > 0 ? Math.round((completed / total) * 1000) / 10 : 0;
+  return { completeness, total, completed };
+}
+
+type NestedMap = Map<string, Map<string, Map<string, CsvRow[]>>>;
+
+function groupRows(rows: CsvRow[]): NestedMap {
+  const companyMap: NestedMap = new Map();
+  for (const row of rows) {
     const company = (row.company_name || "").trim();
     const report = (row.report || "").trim();
     const bu = (row.bu_name || "").trim();
@@ -102,50 +117,106 @@ export function processCSV(rows: CsvRow[]): ProcessResult {
     if (!buMap.has(bu)) buMap.set(bu, []);
     buMap.get(bu)!.push(row);
   }
+  return companyMap;
+}
+
+export function processCSV(rows: CsvRow[]): ProcessResult {
+  const today = new Date();
+
+  const monthlyRows = rows.filter(r => r.reporting_frequency === "MONTHLY");
+  const yearlyRows = rows.filter(r => r.reporting_frequency === "YEARLY");
+
+  const monthlyMap = groupRows(monthlyRows);
+  const yearlyMap = groupRows(yearlyRows);
+
+  // Collect all unique company > report > bu keys from both
+  const allKeys = new Map<string, Map<string, Set<string>>>();
+  for (const map of [monthlyMap, yearlyMap]) {
+    for (const [company, reportMap] of map) {
+      if (!allKeys.has(company)) allKeys.set(company, new Map());
+      const rMap = allKeys.get(company)!;
+      for (const [report, buMap] of reportMap) {
+        if (!rMap.has(report)) rMap.set(report, new Set());
+        const bSet = rMap.get(report)!;
+        for (const bu of buMap.keys()) bSet.add(bu);
+      }
+    }
+  }
 
   const companies: CompanyNode[] = [];
   let totalBUs = 0;
   let totalReports = 0;
-  let allTotal = 0;
-  let allCompleted = 0;
+  let allMonthlyTotal = 0, allMonthlyCompleted = 0;
+  let allYearlyTotal = 0, allYearlyCompleted = 0;
 
-  for (const [companyName, reportMap] of [...companyMap.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+  for (const [companyName, reportMap] of [...allKeys.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
     const reports: ReportNode[] = [];
-    let companyTotal = 0;
-    let companyCompleted = 0;
+    let companyMonthlyTotal = 0, companyMonthlyCompleted = 0;
+    let companyYearlyTotal = 0, companyYearlyCompleted = 0;
 
-    for (const [reportName, buMap] of [...reportMap.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+    for (const [reportName, buSet] of [...reportMap.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
       const bus: BuNode[] = [];
-      let reportTotal = 0;
-      let reportCompleted = 0;
+      let reportMonthlyTotal = 0, reportMonthlyCompleted = 0;
+      let reportYearlyTotal = 0, reportYearlyCompleted = 0;
       totalReports++;
 
-      for (const [buName, buRows] of [...buMap.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
-        const stats = computeBuCompleteness(buRows, today);
+      for (const buName of [...buSet].sort()) {
+        const monthlyBuRows = monthlyMap.get(companyName)?.get(reportName)?.get(buName) || [];
+        const yearlyBuRows = yearlyMap.get(companyName)?.get(reportName)?.get(buName) || [];
+
+        const mStats = monthlyBuRows.length > 0
+          ? computeMonthlyCompleteness(monthlyBuRows, today)
+          : { completeness: 0, total: 0, completed: 0 };
+
+        const yStats = yearlyBuRows.length > 0
+          ? computeYearlyCompleteness(yearlyBuRows)
+          : { completeness: 0, total: 0, completed: 0 };
+
         bus.push({
           name: buName,
-          completeness: stats.completeness,
-          totalQuestions: stats.total,
-          completedQuestions: stats.completed,
+          completeness: mStats.completeness,
+          totalQuestions: mStats.total,
+          completedQuestions: mStats.completed,
+          yearlyCompleteness: yStats.completeness,
+          yearlyTotal: yStats.total,
+          yearlyCompleted: yStats.completed,
         });
-        reportTotal += stats.total;
-        reportCompleted += stats.completed;
+
+        reportMonthlyTotal += mStats.total;
+        reportMonthlyCompleted += mStats.completed;
+        reportYearlyTotal += yStats.total;
+        reportYearlyCompleted += yStats.completed;
         totalBUs++;
       }
 
-      const reportCompleteness = reportTotal > 0 ? Math.round((reportCompleted / reportTotal) * 1000) / 10 : 0;
-      reports.push({ name: reportName, completeness: reportCompleteness, bus });
-      companyTotal += reportTotal;
-      companyCompleted += reportCompleted;
+      const reportCompleteness = reportMonthlyTotal > 0
+        ? Math.round((reportMonthlyCompleted / reportMonthlyTotal) * 1000) / 10 : 0;
+      const reportYearlyCompleteness = reportYearlyTotal > 0
+        ? Math.round((reportYearlyCompleted / reportYearlyTotal) * 1000) / 10 : 0;
+
+      reports.push({ name: reportName, completeness: reportCompleteness, yearlyCompleteness: reportYearlyCompleteness, bus });
+
+      companyMonthlyTotal += reportMonthlyTotal;
+      companyMonthlyCompleted += reportMonthlyCompleted;
+      companyYearlyTotal += reportYearlyTotal;
+      companyYearlyCompleted += reportYearlyCompleted;
     }
 
-    const companyCompleteness = companyTotal > 0 ? Math.round((companyCompleted / companyTotal) * 1000) / 10 : 0;
-    companies.push({ name: companyName, completeness: companyCompleteness, reports });
-    allTotal += companyTotal;
-    allCompleted += companyCompleted;
+    const companyCompleteness = companyMonthlyTotal > 0
+      ? Math.round((companyMonthlyCompleted / companyMonthlyTotal) * 1000) / 10 : 0;
+    const companyYearlyCompleteness = companyYearlyTotal > 0
+      ? Math.round((companyYearlyCompleted / companyYearlyTotal) * 1000) / 10 : 0;
+
+    companies.push({ name: companyName, completeness: companyCompleteness, yearlyCompleteness: companyYearlyCompleteness, reports });
+
+    allMonthlyTotal += companyMonthlyTotal;
+    allMonthlyCompleted += companyMonthlyCompleted;
+    allYearlyTotal += companyYearlyTotal;
+    allYearlyCompleted += companyYearlyCompleted;
   }
 
-  const overallCompleteness = allTotal > 0 ? Math.round((allCompleted / allTotal) * 1000) / 10 : 0;
+  const overallCompleteness = allMonthlyTotal > 0 ? Math.round((allMonthlyCompleted / allMonthlyTotal) * 1000) / 10 : 0;
+  const overallYearlyCompleteness = allYearlyTotal > 0 ? Math.round((allYearlyCompleted / allYearlyTotal) * 1000) / 10 : 0;
 
   return {
     companies,
@@ -154,6 +225,7 @@ export function processCSV(rows: CsvRow[]): ProcessResult {
       totalReports,
       totalBUs,
       overallCompleteness,
+      overallYearlyCompleteness,
     },
   };
 }

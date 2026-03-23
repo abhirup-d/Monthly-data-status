@@ -23,10 +23,19 @@ function parseSelectionKey(key: string): Selection {
   return { company, report, bu };
 }
 
-function completenessBadge(pct: number) {
-  const variant = pct >= 80 ? "default" : pct >= 50 ? "secondary" : "destructive";
+function completenessBadge(pct: number, label?: string) {
   const bg = pct >= 80 ? "bg-green-100 text-green-800 hover:bg-green-100" : pct >= 50 ? "bg-yellow-100 text-yellow-800 hover:bg-yellow-100" : "bg-red-100 text-red-800 hover:bg-red-100";
-  return <Badge variant={variant} className={`text-xs ${bg}`}>{pct}%</Badge>;
+  const variant = pct >= 80 ? "default" : pct >= 50 ? "secondary" : "destructive";
+  return <Badge variant={variant} className={`text-xs ${bg}`}>{label ? `${label}: ` : ""}{pct}%</Badge>;
+}
+
+function dualBadges(monthly: number, yearly: number) {
+  return (
+    <div className="flex items-center gap-1">
+      {completenessBadge(monthly, "M")}
+      {completenessBadge(yearly, "Y")}
+    </div>
+  );
 }
 
 export function ReportTree({ companies, selections, onSelectionChange, onDownloadSingle, isGenerating }: ReportTreeProps) {
@@ -125,7 +134,7 @@ export function ReportTree({ companies, selections, onSelectionChange, onDownloa
                 </button>
                 <Building2 className="h-4 w-4 text-blue-600" />
                 <span className="text-sm font-medium flex-1">{company.name}</span>
-                {completenessBadge(company.completeness)}
+                {dualBadges(company.completeness, company.yearlyCompleteness)}
               </div>
 
               {/* Reports */}
@@ -150,7 +159,7 @@ export function ReportTree({ companies, selections, onSelectionChange, onDownloa
                       </button>
                       <FileText className="h-4 w-4 text-purple-600" />
                       <span className="text-sm flex-1">{report.name}</span>
-                      {completenessBadge(report.completeness)}
+                      {dualBadges(report.completeness, report.yearlyCompleteness)}
                     </div>
 
                     {/* BUs */}
@@ -166,10 +175,7 @@ export function ReportTree({ companies, selections, onSelectionChange, onDownloa
                           />
                           <Layers className="h-4 w-4 text-orange-500" />
                           <span className="text-sm flex-1">{bu.name}</span>
-                          <span className="text-xs text-muted-foreground mr-2">
-                            {bu.completedQuestions}/{bu.totalQuestions}
-                          </span>
-                          {completenessBadge(bu.completeness)}
+                          {dualBadges(bu.completeness, bu.yearlyCompleteness)}
                           <button
                             onClick={() => onDownloadSingle(parseSelectionKey(buKey))}
                             disabled={isGenerating}

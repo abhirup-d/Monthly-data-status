@@ -19,6 +19,7 @@ export default function Home() {
   const [generateProgress, setGenerateProgress] = useState("");
   const [error, setError] = useState<string | null>(null);
   const csvRowsRef = useRef<CsvRow[]>([]);
+  const yearlyRowsRef = useRef<CsvRow[]>([]);
 
   const handleFileUpload = useCallback(async (uploadedFile: File) => {
     setFileName(uploadedFile.name);
@@ -36,7 +37,9 @@ export default function Home() {
       }
 
       const monthlyRows = parsed.data.filter(r => r.reporting_frequency === "MONTHLY");
+      const yearlyRows = parsed.data.filter(r => r.reporting_frequency === "YEARLY");
       csvRowsRef.current = monthlyRows;
+      yearlyRowsRef.current = yearlyRows;
 
       const data = processCSV(parsed.data);
       setResult(data);
@@ -63,6 +66,7 @@ export default function Home() {
     setError(null);
     setGenerateProgress("");
     csvRowsRef.current = [];
+    yearlyRowsRef.current = [];
   }, []);
 
   const downloadBlob = (blob: Blob, filename: string) => {
@@ -80,11 +84,16 @@ export default function Home() {
            r.report?.trim() === selection.report &&
            r.bu_name?.trim() === selection.bu
     );
+    const filteredYearly = yearlyRowsRef.current.filter(
+      r => r.company_name?.trim() === selection.company &&
+           r.report?.trim() === selection.report &&
+           r.bu_name?.trim() === selection.bu
+    );
 
     const res = await fetch("/api/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ rows: filtered, selections: [selection] }),
+      body: JSON.stringify({ rows: filtered, yearlyRows: filteredYearly, selections: [selection] }),
     });
 
     if (!res.ok) {
@@ -159,8 +168,8 @@ export default function Home() {
     <div className="min-h-screen bg-background">
       <header className="border-b border-border">
         <div className="max-w-4xl mx-auto px-4 py-4">
-          <h1 className="text-xl font-bold text-[#2F5496]">Monthly Data Status Reports</h1>
-          <p className="text-sm text-muted-foreground">Upload CSV, preview data completeness, download Excel reports</p>
+          <h1 className="text-xl font-bold text-[#2F5496]">Data Status Reports</h1>
+          <p className="text-sm text-muted-foreground">Upload CSV, preview monthly & yearly data completeness, download Excel reports</p>
         </div>
       </header>
 

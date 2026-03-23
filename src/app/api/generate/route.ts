@@ -11,8 +11,8 @@ export const maxDuration = 60;
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json() as { rows: CsvRow[]; selections: Selection[] };
-    const { rows, selections } = body;
+    const body = await request.json() as { rows: CsvRow[]; yearlyRows?: CsvRow[]; selections: Selection[] };
+    const { rows, yearlyRows, selections } = body;
 
     if (!rows || !selections || selections.length === 0) {
       return NextResponse.json({ error: "Missing rows or selections" }, { status: 400 });
@@ -24,7 +24,7 @@ export async function POST(request: NextRequest) {
     // Single file download
     if (selections.length === 1) {
       const sel = selections[0];
-      const buffer = await generateExcel(rows, sel.company, sel.report, sel.bu);
+      const buffer = await generateExcel(rows, sel.company, sel.report, sel.bu, yearlyRows);
       const safeBu = sel.bu.replace(/[/\\:*?"<>|]/g, "_");
       const filename = `${safeBu} Monthly Data Status ${todayStr}.xlsx`;
 
@@ -46,7 +46,7 @@ export async function POST(request: NextRequest) {
     archive.pipe(passthrough);
 
     for (const sel of selections) {
-      const buffer = await generateExcel(rows, sel.company, sel.report, sel.bu);
+      const buffer = await generateExcel(rows, sel.company, sel.report, sel.bu, yearlyRows);
       const safeCompany = sel.company.replace(/[/\\:*?"<>|]/g, "_");
       const safeReport = sel.report.replace(/[/\\:*?"<>|]/g, "_");
       const safeBu = sel.bu.replace(/[/\\:*?"<>|]/g, "_");
