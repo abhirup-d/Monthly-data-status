@@ -1,41 +1,46 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
+import Papa from "papaparse";
+import JSZip from "jszip";
 import { UploadZone } from "@/components/upload-zone";
 import { StatsBar } from "@/components/stats-bar";
 import { ReportTree, selectionKey, parseSelectionKey } from "@/components/report-tree";
 import { DownloadBar } from "@/components/download-bar";
-import type { ProcessResult, Selection } from "@/lib/types";
+import { processCSV } from "@/lib/csv-parser";
+import type { ProcessResult, Selection, CsvRow } from "@/lib/types";
 
 export default function Home() {
-  const [file, setFile] = useState<File | null>(null);
+  const [fileName, setFileName] = useState<string | null>(null);
   const [result, setResult] = useState<ProcessResult | null>(null);
   const [selections, setSelections] = useState<Set<string>>(new Set());
   const [isProcessing, setIsProcessing] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [generateProgress, setGenerateProgress] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const csvRowsRef = useRef<CsvRow[]>([]);
 
   const handleFileUpload = useCallback(async (uploadedFile: File) => {
-    setFile(uploadedFile);
+    setFileName(uploadedFile.name);
     setError(null);
     setIsProcessing(true);
     setResult(null);
     setSelections(new Set());
 
     try {
-      const formData = new FormData();
-      formData.append("file", uploadedFile);
+      const text = await uploadedFile.text();
+      const parsed = Papa.parse<CsvRow>(text, { header: true, skipEmptyLines: true });
 
-      const res = await fetch("/api/process", { method: "POST", body: formData });
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || "Failed to process file");
+      if (parsed.data.length === 0) {
+        throw new Error("No data found in CSV");
       }
 
-      const data: ProcessResult = await res.json();
+      const monthlyRows = parsed.data.filter(r => r.reporting_frequency === "MONTHLY");
+      csvRowsRef.current = monthlyRows;
+
+      const data = processCSV(parsed.data);
       setResult(data);
 
-      // Auto-select all
       const allKeys = new Set(
         data.companies.flatMap(c =>
           c.reports.flatMap(r =>
@@ -52,71 +57,106 @@ export default function Home() {
   }, []);
 
   const handleClear = useCallback(() => {
-    setFile(null);
+    setFileName(null);
     setResult(null);
     setSelections(new Set());
     setError(null);
+    setGenerateProgress("");
+    csvRowsRef.current = [];
   }, []);
 
+  const downloadBlob = (blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const generateSingleExcel = async (selection: Selection): Promise<ArrayBuffer> => {
+    const filtered = csvRowsRef.current.filter(
+      r => r.company_name?.trim() === selection.company &&
+           r.report?.trim() === selection.report &&
+           r.bu_name?.trim() === selection.bu
+    );
+
+    const res = await fetch("/api/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rows: filtered, selections: [selection] }),
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(text || "Failed to generate report");
+    }
+
+    return res.arrayBuffer();
+  };
+
   const handleDownloadSingle = useCallback(async (selection: Selection) => {
-    if (!file) return;
+    if (csvRowsRef.current.length === 0) return;
     setIsGenerating(true);
+    setError(null);
     try {
-      const formData = new FormData();
-      formData.append("file", file);
-      formData.append("selections", JSON.stringify([selection]));
-
-      const res = await fetch("/api/generate", { method: "POST", body: formData });
-      if (!res.ok) throw new Error("Failed to generate report");
-
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      const disposition = res.headers.get("Content-Disposition");
-      const match = disposition?.match(/filename="(.+)"/);
-      a.download = match?.[1] || "report.xlsx";
-      a.click();
-      URL.revokeObjectURL(url);
+      const buffer = await generateSingleExcel(selection);
+      const today = new Date();
+      const todayStr = `${String(today.getDate()).padStart(2, "0")}_${String(today.getMonth() + 1).padStart(2, "0")}_${today.getFullYear()}`;
+      const safeBu = selection.bu.replace(/[/\\:*?"<>|]/g, "_");
+      const filename = `${safeBu} Monthly Data Status ${todayStr}.xlsx`;
+      downloadBlob(new Blob([buffer]), filename);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Download failed");
     } finally {
       setIsGenerating(false);
+      setGenerateProgress("");
     }
-  }, [file]);
+  }, []);
 
   const handleDownloadSelected = useCallback(async () => {
-    if (!file || selections.size === 0) return;
+    if (csvRowsRef.current.length === 0 || selections.size === 0) return;
     setIsGenerating(true);
+    setError(null);
+
+    const selectionArray: Selection[] = [...selections].map(parseSelectionKey);
+
+    // Single file — no ZIP needed
+    if (selectionArray.length === 1) {
+      await handleDownloadSingle(selectionArray[0]);
+      return;
+    }
+
     try {
-      const selectionArray: Selection[] = [...selections].map(parseSelectionKey);
+      const today = new Date();
+      const todayStr = `${String(today.getDate()).padStart(2, "0")}_${String(today.getMonth() + 1).padStart(2, "0")}_${today.getFullYear()}`;
+      const zip = new JSZip();
 
-      const formData = new FormData();
-      formData.append("file", file);
-      formData.append("selections", JSON.stringify(selectionArray));
+      for (let i = 0; i < selectionArray.length; i++) {
+        const sel = selectionArray[i];
+        setGenerateProgress(`Generating ${i + 1} of ${selectionArray.length}...`);
 
-      const res = await fetch("/api/generate", { method: "POST", body: formData });
-      if (!res.ok) throw new Error("Failed to generate reports");
+        const buffer = await generateSingleExcel(sel);
+        const safeCompany = sel.company.replace(/[/\\:*?"<>|]/g, "_");
+        const safeReport = sel.report.replace(/[/\\:*?"<>|]/g, "_");
+        const safeBu = sel.bu.replace(/[/\\:*?"<>|]/g, "_");
+        const filename = `${safeBu} Monthly Data Status ${todayStr}.xlsx`;
+        zip.file(`${safeCompany}/${safeReport}/${filename}`, buffer);
+      }
 
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      const disposition = res.headers.get("Content-Disposition");
-      const match = disposition?.match(/filename="(.+)"/);
-      a.download = match?.[1] || "reports.zip";
-      a.click();
-      URL.revokeObjectURL(url);
+      setGenerateProgress("Creating ZIP...");
+      const zipBlob = await zip.generateAsync({ type: "blob" });
+      downloadBlob(zipBlob, `Monthly Data Status Reports ${todayStr}.zip`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Download failed");
     } finally {
       setIsGenerating(false);
+      setGenerateProgress("");
     }
-  }, [file, selections]);
+  }, [selections, handleDownloadSingle]);
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Header */}
       <header className="border-b border-border">
         <div className="max-w-4xl mx-auto px-4 py-4">
           <h1 className="text-xl font-bold text-[#2F5496]">Monthly Data Status Reports</h1>
@@ -124,12 +164,11 @@ export default function Home() {
         </div>
       </header>
 
-      {/* Main content */}
       <main className="max-w-4xl mx-auto px-4 py-6 space-y-6 pb-24">
         <UploadZone
           onFileUpload={handleFileUpload}
           isProcessing={isProcessing}
-          fileName={file?.name || null}
+          fileName={fileName}
           onClear={handleClear}
         />
 
@@ -160,11 +199,11 @@ export default function Home() {
         )}
       </main>
 
-      {/* Download bar */}
       <DownloadBar
         selectedCount={selections.size}
         onDownload={handleDownloadSelected}
         isGenerating={isGenerating}
+        progress={generateProgress}
       />
     </div>
   );
