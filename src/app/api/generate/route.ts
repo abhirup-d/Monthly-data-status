@@ -9,6 +9,10 @@ export const runtime = "nodejs";
 // Allow large request bodies (filtered CSV rows can still be several MB)
 export const maxDuration = 60;
 
+function sanitizeFilename(name: string): string {
+  return name.replace(/[/\\:*?"<>|]/g, "_").replace(/[^\x00-\xFF]/g, "_");
+}
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json() as { rows: CsvRow[]; yearlyRows?: CsvRow[]; selections: Selection[] };
@@ -25,7 +29,7 @@ export async function POST(request: NextRequest) {
     if (selections.length === 1) {
       const sel = selections[0];
       const buffer = await generateExcel(rows, sel.company, sel.report, sel.bu, yearlyRows);
-      const safeBu = sel.bu.replace(/[/\\:*?"<>|]/g, "_");
+      const safeBu = sanitizeFilename(sel.bu);
       const filename = `${safeBu} Monthly Data Status ${todayStr}.xlsx`;
 
       return new NextResponse(new Uint8Array(buffer), {
@@ -47,9 +51,9 @@ export async function POST(request: NextRequest) {
 
     for (const sel of selections) {
       const buffer = await generateExcel(rows, sel.company, sel.report, sel.bu, yearlyRows);
-      const safeCompany = sel.company.replace(/[/\\:*?"<>|]/g, "_");
-      const safeReport = sel.report.replace(/[/\\:*?"<>|]/g, "_");
-      const safeBu = sel.bu.replace(/[/\\:*?"<>|]/g, "_");
+      const safeCompany = sanitizeFilename(sel.company);
+      const safeReport = sanitizeFilename(sel.report);
+      const safeBu = sanitizeFilename(sel.bu);
       const filename = `${safeBu} Monthly Data Status ${todayStr}.xlsx`;
       const path = `${safeCompany}/${safeReport}/${filename}`;
       archive.append(buffer, { name: path });

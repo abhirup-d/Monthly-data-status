@@ -112,7 +112,7 @@ export default function Home() {
       const buffer = await generateSingleExcel(selection);
       const today = new Date();
       const todayStr = `${String(today.getDate()).padStart(2, "0")}_${String(today.getMonth() + 1).padStart(2, "0")}_${today.getFullYear()}`;
-      const safeBu = selection.bu.replace(/[/\\:*?"<>|]/g, "_");
+      const safeBu = selection.bu.replace(/[/\\:*?"<>|]/g, "_").replace(/[^\x00-\xFF]/g, "_");
       const filename = `${safeBu} Monthly Data Status ${todayStr}.xlsx`;
       downloadBlob(new Blob([buffer]), filename);
     } catch (err) {
@@ -146,9 +146,9 @@ export default function Home() {
         setGenerateProgress(`Generating ${i + 1} of ${selectionArray.length}...`);
 
         const buffer = await generateSingleExcel(sel);
-        const safeCompany = sel.company.replace(/[/\\:*?"<>|]/g, "_");
-        const safeReport = sel.report.replace(/[/\\:*?"<>|]/g, "_");
-        const safeBu = sel.bu.replace(/[/\\:*?"<>|]/g, "_");
+        const safeCompany = sel.company.replace(/[/\\:*?"<>|]/g, "_").replace(/[^\x00-\xFF]/g, "_");
+        const safeReport = sel.report.replace(/[/\\:*?"<>|]/g, "_").replace(/[^\x00-\xFF]/g, "_");
+        const safeBu = sel.bu.replace(/[/\\:*?"<>|]/g, "_").replace(/[^\x00-\xFF]/g, "_");
         const filename = `${safeBu} Monthly Data Status ${todayStr}.xlsx`;
         zip.file(`${safeCompany}/${safeReport}/${filename}`, buffer);
       }
